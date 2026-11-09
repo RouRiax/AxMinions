@@ -1,0 +1,74 @@
+
+name: HugolaCraft AxMinions H2 2.2.224 test build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build from pinned AxMinions 1.0.20 source
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout pinned upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: Artillex-Studios/AxMinions
+          ref: d4fd0e1187213125f306115e6751af1ed37f6b5f
+          persist-credentials: false
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Change only H2 dependency in source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          paths = {
+              'common/src/main/kotlin/com/artillexstudios/axminions/AxMinionsPlugin.kt':
+                  ('com{}h2database:h2:2.2.220', 'com{}h2database:h2:2.2.224'),
+              'common/build.gradle':
+                  ('com.h2database:h2:2.2.220', 'com.h2database:h2:2.2.224'),
+          }
+          for filename, (old, new) in paths.items():
+              p = Path(filename)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'ABORT: {filename} expected exactly one old dependency; found {text.count(old)}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+              print(f'Updated {filename}')
+          PY
+          git diff --check
+          git diff -- common/src/main/kotlin/com/artillexstudios/axminions/AxMinionsPlugin.kt common/build.gradle
+
+      - name: Show Gradle version
+        run: ./gradlew --version
+
+      - name: Build official Gradle shadowJar task
+        run: ./gradlew --no-daemon --stacktrace --max-workers=2 -Dorg.gradle.jvmargs='-Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8' shadowJar
+
+      - name: List candidate JAR files
+        if: success()
+        run: find . -path '*/build/libs/*.jar' -type f -printf '%p %s bytes\n' | sort
+
+      - name: Hash primary JAR files
+        if: success()
+        run: |
+          find build/libs -maxdepth 1 -type f -name '*.jar' -print0 | sort -z | xargs -0 -r sha256sum
+
+      - name: Upload test JAR and build logs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AxMinions-H2-2.2.224-CI-TEST
+          path: build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 7
